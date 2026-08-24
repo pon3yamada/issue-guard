@@ -1,0 +1,61 @@
+name: Issue Goal Guard
+description: Issue 本文に「ゴール・課題・成功の定義」が実内容つきで書かれているかを終了コードで判定する
+author: pon3yamada
+
+inputs:
+  issue-number:
+    description: 検査する Issue の番号
+    required: true
+  repository:
+    description: 対象リポジトリ（owner/repo）
+    required: true
+  github-token:
+    description: Issue を読むためのトークン（通常は secrets.GITHUB_TOKEN）
+    required: true
+
+outputs:
+  ok:
+    description: 合格なら true、不合格なら false
+    value: ${{ steps.validate.outputs.ok }}
+  detail:
+    description: 不合格のときの不足項目（スクリプトの出力そのまま）
+    value: ${{ steps.validate.outputs.detail }}
+
+runs:
+  using: composite
+  steps:
+    - id: validate
+      shell: bash
+      # ★Issue 本文は ${{ }} で展開しない。
+      #   本文は誰でも書ける信頼できない入力なので、シェルスクリプトに埋め込むと
+      #   任意コマンドを実行させられる。gh でファイルに落として、パスだけを渡す。
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ inputs.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -u
+        BODY_FILE="$(mktemp)"
+        trap 'rm -f "$BODY_FILE"' EXIT
+
+        if ! gh issue view "$ISSUE_NUMBER" --json body -q .body > "$BODY_FILE"; then
+          echo "Issue #${ISSUE_NUMBER} の本文を取得できませんでした" >&2
+          exit 1
+        fi
+
+        # 合否はスクリプトの終了コードだけが決める
+        if OUT="$(bash "$ACTION_PATH/scripts/validate-issue.sh" "$BODY_FILE" 2>&1)"; then
+          RESULT=true
+        else
+          RESULT=false
+        fi
+
+        printf '%s\n' "$OUT"
+
+        {
+          echo "ok=$RESULT"
+          echo "detail<<ISSUE_GUARD_DETAIL_EOF"
+          printf '%s\n' "$OUT"
+          echo "ISSUE_GUARD_DETAIL_EOF"
+        } >> "$GITHUB_OUTPUT"
